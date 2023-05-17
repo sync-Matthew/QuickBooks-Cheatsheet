@@ -129,71 +129,6 @@ def get_quickbooks_client(request):
     return redirect('your-url-here')
 ```  
 
-6. Assuming you've stored your token in the databse you can now query from QuickBooks! Here's how you can query all the customers from a company:  
-
-```
-    limit = 1000
-    offset = 0
-    all_customers = []
-
-    while True:
-        # Retrieve customers with pagination parameters
-        customers = Customer.query("SELECT * FROM Customer WHERE Active = True STARTPOSITION {} MAXRESULTS {}".format(offset, limit), qb=client)
-        # Add the retrieved customers to the overall list
-        all_customers.extend(customers)
-
-        if len(customers) < limit:
-            # Break the loop if the number of retrieved customers is less than the limit
-            break
-
-        offset += limit
-
-    for customer in all_customers:
-      print(customer.Id)
-      print(customer.DisplayName)
-      print(customer.CompanyName)
-```  
-
-7. Examples of creating customers:  
-
-```
-from quickbooks.objects.customer import Customer
-
-customer = Customer()
-customer.CompanyName = "Test Company"
-customer.save(qb=client)
-```  
-
-**Alternatively**, you can batch_create records in QuickBooks.
-
-```
-from quickbooks.batch import batch_create
-from quickbooks.objects.customer import Customer
-
-# Get customers from some quickbase table and store those results in the customers_response
-
-new_customers = []
-
-for customer in customers_response:
-    new_customer = Customer()
-    new_customer.DisplayName = customer['some_field']
-    new_customer.CompanyName = customer['some_field']
-    new_customers.append(new_customer)
-
-results = batch_create(new_customers, qb=client)
-```  
-
-Handle the errors from `batch_create`:  
-
-```
-    results = batch_create(new_customers, qb=client)
-
-    for fault in results.faults:
-        print("Operation failed on " + fault.original_object.DisplayName)
-        for error in fault.Error:
-            print("Error " + error.Message)
-```  
-
 <h2>How to: Refresh an expired access token</h2>  
 
 0. Create your model to store the token information:  
@@ -237,5 +172,114 @@ class QuickBooksToken(models.Model):
     token.refresh_token = auth_client.refresh_token
     token.save()
 ```  
+
+<h2> How to: Query for Customers, Items, ... </h2>  
+
+<h3> Customers </h3>  
+
+By default, QuickBooks only allows the API to return up to 1000 records at a time. Due to this, we'll have to use pagination to retrieve more than that.  
+
+You can use basic SQL queries to pull objects from the API.  
+
+In the example below, we iterate through all Customer objects of the authorized QuickBooks account.  
+```
+    # Default limit on number of results that can be returned is 1000, so we set this as our max.
+    limit = 1000
+    # The offset is used to keep track of our position within the table we are pulling from.
+    offset = 0
+    # This list will store all customers as they are pulled.
+    all_customers = []
+
+    while True:
+        # Retrieve customers with pagination parameters
+        customers = Customer.query("SELECT * FROM Customer WHERE Active = True STARTPOSITION {} MAXRESULTS {}".format(offset, limit), qb=client)
+        # Add the retrieved customers to the overall list
+        all_customers.extend(customers)
+
+        if len(customers) < limit:
+            # Break the loop if the number of retrieved customers is less than the limit
+            break
+
+        offset += limit
+    
+    # For a full list of properties that the object has, see the python-quickbooks documentation at the top of this README.
+    for customer in all_customers:
+      print(customer.Id)
+      print(customer.DisplayName)
+      print(customer.CompanyName)
+```  
+
+<h3> Items </h3>  
+
+In the example above, we pulled all Customers from the authorized QuickBooks account using pagination. If you want to pull all records from a table, use pagination in the same way.
+
+```
+    from quickbooks.objects.item import Item
+
+    # Pagination
+    ...
+    
+    # Query:
+    items = Item.query("SELECT * FROM Item WHERE Active = True STARTPOSITION {} MAXRESULTS {}".format(offset, limit), qb=client)
+    
+    # Add your logic here for handling the pulled data.
+    for item in items:
+        print(item.Name)
+```
+
+You can follow the same basic formula for any different object type in the Python-Quickbooks library.  
+
+<h2> How to: Save items to QuickBooks </h2>  
+
+*Before beginning, you should note that there will be required fields for saving objects to QuickBooks. To find out what fields are required, reference the API docs at the top of this README.  
+
+<h3> Create Customer - Singular </h3>  
+
+```
+from quickbooks.objects.customer import Customer
+
+customer = Customer()
+customer.CompanyName = "Test Company"
+customer.save(qb=client)
+```  
+
+<h3> Create Customer - Batch </h3>  
+
+**Alternatively**, you can batch_create records in QuickBooks. This operation is particularly useful in the case of doing an initial sync of data between two sources.
+
+```
+from quickbooks.batch import batch_create
+from quickbooks.objects.customer import Customer
+
+# Get customers from some quickbase table and store those results in the customers_response
+
+new_customers = []
+
+for customer in customers_response:
+    new_customer = Customer()
+    new_customer.DisplayName = customer['some_field']
+    new_customer.CompanyName = customer['some_field']
+    new_customers.append(new_customer)
+
+results = batch_create(new_customers, qb=client)
+```  
+
+Handle the errors from `batch_create`:  
+
+```
+    results = batch_create(new_customers, qb=client)
+
+    for fault in results.faults:
+        print("Operation failed on " + fault.original_object.DisplayName)
+        for error in fault.Error:
+            print("Error " + error.Message)
+```  
+
+<h2> How to: Add Celery </h2>  
+
+Some tasks may take longer than the timeout on your server allots. It's important not to remove or raise the timeout to an exceedingly high number.  
+For the aforementioned tasks, use Celery - a task manager which allows you to return a response to the client and continue the data processing in the background.  
+
+[My Celery Tutorial](https://github.com/sync-Matthew/Celery-Cheatsheet)  
 
 <h1> Production </h1>  
