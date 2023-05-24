@@ -275,11 +275,171 @@ Handle the errors from `batch_create`:
             print("Error " + error.Message)
 ```  
 
+<h1> Production </h1>  
+
+<h3>Getting Started</h3>  
+
+1. Sign into the Intuit developer portal, select the `Dashboard` tab, then open your company.  
+
+2. Navigate to the `Production Settings` on the left-hand side and obtain your "Keys & credentials" after completing a short survey about how your application will use QBO.  
+
+3. After cloning your development environment to your server, create your virutal environment and install:  
+`pip install django`  
+`pip install intuit-oauth`  
+`pip install python-quickbooks`  
+
+4. Once you have all the necessary packages, go to `your_app/settings.py` and add your **PRODUCTION** credentials:  
+
+```
+# your_app/settings.py
+# ...
+# This is QBO's equivalent of DEBUG=True
+QUICKBOOKS_SANDBOX_MODE = False
+
+# Quickbooks sandbox credentials
+PRODUCTION_QUICKBOOKS_CLIENT_ID = 'your_client_id'
+PRODUCTION_QUICKBOOKS_CLIENT_SECRET = 'your_client_secret'
+PRODUCTION_QUICKBOOKS_REDIRECT_URI = 'https://your-domain.com/qbo/callback'
+
+# ...
+```  
+*Make sure you turn off QUICKBOOKS_SANDBOX_MODE, i.e. set it to "False"*  
+
+From our previous development setup, we added checks within our views based on the QUICKBOOKS_SANDBOX_MODE. After setting it to false, our view will now utilize Production credentials.  
+
+```
+def authorize_quickbooks(request):
+    auth_client = AuthClient(
+        client_id=(settings.QUICKBOOKS_CLIENT_ID if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_ID),
+        client_secret=(settings.QUICKBOOKS_CLIENT_SECRET if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_SECRET),
+        environment=('sandbox' if settings.QUICKBOOKS_SANDBOX_MODE else 'production'),
+        redirect_uri=(settings.QUICKBOOKS_REDIRECT_URI if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_REDIRECT_URI),
+    )
+    auth_url = auth_client.get_authorization_url([Scopes.ACCOUNTING])
+    request.session['state'] = auth_client.state_token
+    return redirect(auth_url)
+```  
+
+5. Add your necessary logic as a Celery task. For more information, see the reference below.  
+
+
 <h2> How to: Add Celery </h2>  
 
-Some tasks may take longer than the timeout on your server allots. It's important not to remove or raise the timeout to an exceedingly high number.  
-For the aforementioned tasks, use Celery - a task manager which allows you to return a response to the client and continue the data processing in the background.  
+Some tasks may take longer than the timeout on your server allots. For the aforementioned tasks, use Celery - a task manager which allows you to return a response to the client and continue processing data in the background.  
 
 [My Celery Tutorial](https://github.com/sync-Matthew/Celery-Cheatsheet)  
 
-<h1> Production </h1>  
+Here's an example of what a Celery task for your QBO integration might look like:  
+
+`your_app/qbo/tasks.py`:  
+
+```
+# Imports from celery and quickbooks-python
+from celery import shared_task
+from intuitlib.client import AuthClient
+from intuitlib.enums import Scopes
+from quickbooks import QuickBooks
+from quickbooks.objects.customer import Customer
+from quickbooks.objects.item import Item
+from quickbooks.batch import batch_create
+from django.conf import settings
+from .models import QuickBooksToken
+
+# For information on setting up a client with QuickBase - see SyncQB
+from dpf360.client import get_client
+
+# Helper method which takes a QuickBooksToken object and returns the actionable QuickBooks client object.
+# For information on the QuickBooksToken model, see the development portion of this tutorial.
+def client_helper(token):
+
+    auth_client = AuthClient(
+        client_id=(settings.QUICKBOOKS_CLIENT_ID if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_ID),
+        client_secret=(settings.QUICKBOOKS_CLIENT_SECRET if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_SECRET),
+        environment=('sandbox' if settings.QUICKBOOKS_SANDBOX_MODE else 'production'),
+        redirect_uri=(settings.QUICKBOOKS_REDIRECT_URI if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_REDIRECT_URI),
+    )
+
+    refresh_token = token.refresh_token
+    company_id = token.realm_id
+
+    try:
+        client = QuickBooks(
+            auth_client=auth_client,
+            minorversion=62,
+            environ=('sandbox' if settings.QUICKBOOKS_SANDBOX_MODE else 'production'),
+            refresh_token=refresh_token,
+            company_id=company_id,
+        )
+    except Exception as e:
+        print(e)
+
+    return client
+
+# This method from a bird's-eye view does one thing:
+# Syncs our Customers in QuickBooks and Quickbase.
+# If a customer doesn't exist in QuickBooks but it exists in QuickBase, create that record in QuickBooks and update QuickBase with the ID of the created record.
+# And vice versa.
+
+@shared_task
+def sync_customers_task():
+    qb_client = get_client()
+    
+    # Get all the customers from QuickBase
+    try:
+        customers_response = qb_client.do_query(
+            query="{3.GT.0}", # Select all customers
+            database="your_table", # Customers
+            columns=[your_fields], # RID, QuickBooks ID, DisplayName..
+        )
+        # data_a_set = set(item['14'] for item in customers_response)
+    except Exception as e:
+        print(e)
+        
+    # Retrieve all customers from QuickBooks using the most recent QuickBooksToken object credentials
+    token = QuickBooksToken.objects.last()
+    client = client_helper(token)
+    limit = 1000
+    offset = 0
+    quickbooks_customers = []
+
+    while True:
+        # Retrieve customers with pagination parameters
+        customers = Customer.query("SELECT * FROM Customer WHERE Active = True STARTPOSITION {} MAXRESULTS {}".format(offset, limit), qb=client)
+        # Add the retrieved customers to the overall list
+        quickbooks_customers.extend(customers)
+
+        if len(customers) < limit:
+            # Break the loop if the number of retrieved customers is less than the limit
+            break
+
+        offset += limit
+
+    for customer in quickbooks_customers:
+        # Customer from QuickBooks does not exist in QuickBase
+        if (customer.DisplayName not in [item['14'] for item in customers_response]):
+            print(customer.DisplayName)
+            qb_client.add_record(fields={'14': customer.DisplayName, '12': customer.Id}, database='btacp5kk8')
+        # if the customer exists check if it has a QuickBooks ID
+        else:
+            index = next((idx for idx, item in enumerate(customers_response) if item['14'] == customer.DisplayName), None)
+            if index is not None:
+                if customers_response[index]['12'] != customer.Id:
+                    qb_client.edit_record(rid=customers_response[index]['3'], database='btacp5kk8', fields={'12': customer.Id})
+    
+    new_customers = []
+    for customer in customers_response:
+        # Customer from QuickBase does not exist in QuickBooks
+        if (customer['14'] not in [item.DisplayName for item in quickbooks_customers]):
+            # Create a new customer in QuickBooks
+            new_customer = Customer()
+            new_customer.DisplayName = customer['14']
+            new_customer.CompanyName = customer['14']
+            new_customers.append(new_customer)
+
+    results = batch_create(new_customers, qb=client)
+
+    for fault in results.faults:
+        print("Operation failed on " + fault.original_object.DisplayName)
+        for error in fault.Error:
+            print("Error " + error.Message)
+```  
