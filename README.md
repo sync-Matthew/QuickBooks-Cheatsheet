@@ -54,7 +54,7 @@ Finally, initialize your virtual environment and create your new Django project:
 
 2. From `your_app/settings.py`, add the following credentials:  
 
-```
+```python
 # your_app/settings.py
 # ...
 # This is QBO's equivalent of DEBUG=True
@@ -78,7 +78,7 @@ QUICKBOOKS_COMPANY_ID = 'your_company_id'
 
 4. From `qbo/views.py`, add the view which will handle the authorization process:  
 
-```
+```python
 from django.shortcuts import render, redirect
 from django.conf import settings
 from intuitlib.client import AuthClient
@@ -108,7 +108,7 @@ def authorize_quickbooks(request):
 
 Within this view, you can optionally store your token data within a **Model** to prevent the need for constant user authorization during API calls.
 
-```
+```python
 def get_quickbooks_client(request):
     auth_client = AuthClient(
         client_id=(settings.QUICKBOOKS_CLIENT_ID if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_ID),
@@ -133,7 +133,7 @@ def get_quickbooks_client(request):
 
 0. Create your model to store the token information:  
 
-```
+```python
 from django.db import models
 from some_app.models import CustomUser as User
 
@@ -152,7 +152,7 @@ class QuickBooksToken(models.Model):
 
 1. Get the Auth Client  
 
-```
+```python
     auth_client = AuthClient(
       client_id=(settings.QUICKBOOKS_CLIENT_ID if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_ID),
       client_secret=(settings.QUICKBOOKS_CLIENT_SECRET if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_SECRET),
@@ -163,7 +163,7 @@ class QuickBooksToken(models.Model):
 
 2:  
 
-```
+```python
     # Get the token object from the database
     ...
 
@@ -182,7 +182,7 @@ By default, QuickBooks only allows the API to return up to 1000 records at a tim
 You can use basic SQL queries to pull objects from the API.  
 
 In the example below, we iterate through all Customer objects of the authorized QuickBooks account.  
-```
+```python
     # Default limit on number of results that can be returned is 1000, so we set this as our max.
     limit = 1000
     # The offset is used to keep track of our position within the table we are pulling from.
@@ -213,7 +213,7 @@ In the example below, we iterate through all Customer objects of the authorized 
 
 In the example above, we pulled all Customers from the authorized QuickBooks account using pagination. If you want to pull all records from a table, use pagination in the same way.
 
-```
+```python
     from quickbooks.objects.item import Item
 
     # Pagination
@@ -235,7 +235,7 @@ You can follow the same basic formula for any different object type in the Pytho
 
 <h3> Create Customer - Singular </h3>  
 
-```
+```python
 from quickbooks.objects.customer import Customer
 
 customer = Customer()
@@ -247,7 +247,7 @@ customer.save(qb=client)
 
 **Alternatively**, you can batch_create records in QuickBooks. This operation is particularly useful in the case of doing an initial sync of data between two sources.
 
-```
+```python
 from quickbooks.batch import batch_create
 from quickbooks.objects.customer import Customer
 
@@ -266,7 +266,7 @@ results = batch_create(new_customers, qb=client)
 
 Handle the errors from `batch_create`:  
 
-```
+```python
     results = batch_create(new_customers, qb=client)
 
     for fault in results.faults:
@@ -290,7 +290,7 @@ Handle the errors from `batch_create`:
 
 4. Once you have all the necessary packages, go to `your_app/settings.py` and add your **PRODUCTION** credentials:  
 
-```
+```python
 # your_app/settings.py
 # ...
 # This is QBO's equivalent of DEBUG=True
@@ -307,7 +307,7 @@ PRODUCTION_QUICKBOOKS_REDIRECT_URI = 'https://your-domain.com/qbo/callback'
 
 From our previous development setup, we added checks within our views based on the QUICKBOOKS_SANDBOX_MODE. After setting it to false, our view will now utilize Production credentials.  
 
-```
+```python
 def authorize_quickbooks(request):
     auth_client = AuthClient(
         client_id=(settings.QUICKBOOKS_CLIENT_ID if settings.QUICKBOOKS_SANDBOX_MODE else settings.PRODUCTION_QUICKBOOKS_CLIENT_ID),
@@ -333,7 +333,7 @@ Here's an example of what a Celery task for your QBO integration might look like
 
 `your_app/qbo/tasks.py`:  
 
-```
+```python
 # Imports from celery and quickbooks-python
 from celery import shared_task
 from intuitlib.client import AuthClient
